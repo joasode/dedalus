@@ -1189,11 +1189,6 @@ class SpectralOperator1D(SpectralOperator):
         # Caching layer to allow insertion of other arguments
         return self._subspace_matrix(layout, self.input_basis, self.output_basis, self.first_axis)
 
-    def subspace_matrix_adjoint(self, layout):
-        """Build matrix operating on local subspace data."""
-        # Caching layer to allow insertion of other arguments
-        return self._subspace_matrix_adjoint(layout, self.input_basis, self.output_basis, self.first_axis)
-
     def group_matrix(self, group):
         return self._group_matrix(group, self.input_basis, self.output_basis)
 
@@ -1217,15 +1212,6 @@ class SpectralOperator1D(SpectralOperator):
             out_size = layout.local_shape(output_domain, scales=1)[axis]
             return sparse_block_diag(group_blocks, shape=(out_size, arg_size))
 
-    @classmethod
-    @CachedMethod
-    def _subspace_matrix_adjoint(cls, *args):
-        matrix = cls._subspace_matrix(*args)
-        adjoint = matrix.T.conj()
-        if sparse.isspmatrix(adjoint):
-            adjoint = adjoint.tocsr()
-        return adjoint
-
     @staticmethod
     def _full_matrix(input_basis, output_basis, *args):
         raise NotImplementedError()
@@ -1243,7 +1229,7 @@ class SpectralOperator1D(SpectralOperator):
             if adjoint:
                 # arg += adjoint(matrix) @ out
                 data_axis = self.last_axis + len(out.tensorsig)
-                apply_matrix(self.subspace_matrix_adjoint(layout), out.data, data_axis, out=arg.data, overwrite_out=False)
+                apply_matrix(self.subspace_matrix(layout), out.data, data_axis, out=arg.data, overwrite_out=False, adjoint=True)
             else:
                 # out = matrix @ arg
                 data_axis = self.last_axis + len(arg.tensorsig)
@@ -1393,10 +1379,6 @@ class Interpolate(SpectralOperator, metaclass=MultiClass):
     def subspace_matrix(self, layout):
         """Build matrix operating on global subspace data."""
         return self._subspace_matrix(layout, self.input_basis, self.output_basis, self.first_axis, self.position)
-
-    def subspace_matrix_adjoint(self, layout):
-        """Build matrix operating on global subspace data."""
-        return self._subspace_matrix_adjoint(layout, self.input_basis, self.output_basis, self.first_axis, self.position)
 
     def _expand_multiply(self, operand, vars):
         """Expand over multiplication."""
@@ -3268,11 +3250,10 @@ class PolarMOperator(SpectralOperator):
                     vec_in  = comp_in[tuple(slices)]
                     vec_out = comp_out[tuple(slices)]
                     if vec_in.size and vec_out.size:
+                        matrix = self.radial_matrix(spinindex_in, spinindex_out, m)
                         if adjoint:
-                            matrix = self.radial_matrix_adjoint(spinindex_in, spinindex_out, m)
-                            vec_in += apply_matrix(matrix, vec_out, axis=axis) # TEMPORARY
+                            vec_in += apply_matrix(matrix, vec_out, axis=axis, adjoint=True) # TEMPORARY
                         else:
-                            matrix = self.radial_matrix(spinindex_in, spinindex_out, m)
                             vec_out += apply_matrix(matrix, vec_in, axis=axis) # TEMPORARY
 
     def subproblem_matrix(self, subproblem):
@@ -3314,14 +3295,6 @@ class PolarMOperator(SpectralOperator):
 
     def radial_matrix(self, spinindex_in, spinindex_out, m):
         raise NotImplementedError()
-
-    @CachedMethod
-    def radial_matrix_adjoint(self, spinindex_in, spinindex_out, m):
-        matrix = self.radial_matrix(spinindex_in, spinindex_out, m)
-        adjoint = matrix.T.conj()
-        if sparse.isspmatrix(adjoint):
-            adjoint = adjoint.tocsr()
-        return adjoint
 
 
 class MulCosine(PolarMOperator, metaclass=MultiClass):
@@ -3498,11 +3471,10 @@ class SphericalEllOperator(SpectralOperator):
                         vec_in  = comp_in[tuple(slices)]
                         vec_out = comp_out[tuple(slices)]
                         if vec_in.size and vec_out.size:
+                            A = self.radial_matrix(regindex_in, regindex_out, ell)
                             if adjoint:
-                                matrix = self.radial_matrix_adjoint(regindex_in, regindex_out, ell)
-                                vec_in += apply_matrix(matrix, vec_out, axis=axis) # TEMPORARY
+                                vec_in += apply_matrix(A, vec_out, axis=axis, adjoint=True) # TEMPORARY
                             else:
-                                A = self.radial_matrix(regindex_in, regindex_out, ell)
                                 vec_out += apply_matrix(A, vec_in, axis=axis) # TEMPORARY
 
     def subproblem_matrix(self, subproblem):
@@ -3574,14 +3546,6 @@ class SphericalEllOperator(SpectralOperator):
 
     def radial_matrix(regindex_in, regindex_out, ell):
         raise NotImplementedError()
-
-    @CachedMethod
-    def radial_matrix_adjoint(self, regindex_in, regindex_out, ell):
-        matrix = self.radial_matrix(regindex_in, regindex_out, ell)
-        adjoint = matrix.T.conj()
-        if sparse.isspmatrix(adjoint):
-            adjoint = adjoint.tocsr()
-        return adjoint
 
 
 class SphericalGradient(Gradient, SphericalEllOperator):
@@ -4238,14 +4202,6 @@ class SphericalCurl(Curl, SphericalEllOperator):
         else:
             raise ValueError("This should never happen")
 
-    @CachedMethod
-    def radial_matrix_adjoint(self, regindex_in, regindex_out, ell):
-        matrix = self.radial_matrix(regindex_in, regindex_out, ell)
-        adjoint = matrix.T.conj()
-        if sparse.isspmatrix(adjoint):
-            adjoint = adjoint.tocsr()
-        return adjoint
-
     @staticmethod
     @CachedMethod
     def _radial_matrix(radial_basis, regindex_in0, regindex_out0, regtotal_in, regtotal_out, ell):
@@ -4343,11 +4299,10 @@ class SphericalCurl(Curl, SphericalEllOperator):
                             vec_in_cos = comp_in[tuple(slices)][cos_slice]
                             vec_in_msin = comp_in[tuple(slices)][msin_slice]
                             vec_in_complex = vec_in_cos + 1j*vec_in_msin
+                        A = self.radial_matrix(regindex_in, regindex_out, ell)
                         if adjoint:
-                            matrix = self.radial_matrix_adjoint(regindex_in, regindex_out, ell)
-                            vec_in_complex = apply_matrix(matrix, vec_out_complex, axis=axis) # TEMPORARY
+                            vec_in_complex = apply_matrix(A, vec_out_complex, axis=axis, adjoint=True) # TEMPORARY
                         else:
-                            A = self.radial_matrix(regindex_in, regindex_out, ell)
                             vec_out_complex = apply_matrix(A, vec_in_complex, axis=axis)
                         if adjoint:
                             comp_in[tuple(slices)][cos_slice] += vec_in_complex.real
